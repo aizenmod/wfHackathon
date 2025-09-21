@@ -1,10 +1,10 @@
 use cosmwasm_std::{
-    entry_point, to_binary, Addr, BankMsg, Binary, Coin, Deps, DepsMut, Env, Event, MessageInfo, Response, StdError, StdResult
+    entry_point, to_json_binary, BankMsg, Binary, Coin, Deps, DepsMut, Env, Event, MessageInfo, Response, StdError, StdResult
 };
 use cw2::set_contract_version;
 use sha2::{Digest, Sha256};
 
-use crate::msg::{ExecuteMsg, InstantiateMsg, OracleDataResponse, QueryMsg};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{ADMIN, ORACLE_DATA, ORACLE_PUBKEY, ORACLE_PUBKEY_TYPE, parse_key_type};
 
 const CONTRACT_NAME: &str = "crates.io:oracle-contract";
@@ -53,6 +53,9 @@ pub fn execute(
         ExecuteMsg::UpdateOracle { new_pubkey, new_key_type } => {
             execute_update_oracle(deps, info, new_pubkey, new_key_type)
         }
+        ExecuteMsg::SendWithAmlCheck { recipient, wallet, chain, max_risk, risk, expires, signature } => {
+            execute_send_with_aml_check(deps, env, info, recipient, wallet, chain, max_risk, risk, expires, signature)
+        }
     }
 }
 
@@ -95,7 +98,6 @@ fn execute_oracle_update(
     let pubkey = ORACLE_PUBKEY.load(deps.storage)?;
     let key_type = ORACLE_PUBKEY_TYPE.load(deps.storage)?;
 
-    let msg_bytes = data.as_bytes();
     let parsed = parse_key_type(&key_type)
         .ok_or_else(|| StdError::generic_err("stored oracle_key_type invalid"))?;
 
@@ -158,6 +160,65 @@ fn execute_update_oracle(
         .add_event(event))
 }
 
+fn execute_send_with_aml_check(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    recipient: String,
+    wallet: String,
+    chain: String,
+    max_risk: u8,
+    risk: u8,
+    expires: u64,
+    signature: Binary,
+) -> StdResult<Response> {
+    // basic bounds
+    if risk > 10u8 { return Err(StdError::generic_err("risk out of range")); }
+    if max_risk > 10u8 { return Err(StdError::generic_err("max_risk out of range")); }
+
+    // expiry check
+    let now = env.block.time.seconds();
+    if now >= expires { return Err(StdError::generic_err("oracle assessment expired")); }
+
+    // verify oracle signature over canonical message
+    let pubkey = ORACLE_PUBKEY.load(deps.storage)?;
+    let key_type = ORACLE_PUBKEY_TYPE.load(deps.storage)?;
+
+    let payload = format!("{}|{}|{}|{}", wallet, chain, risk, expires);
+    let hash = Sha256::digest(payload.as_bytes()).to_vec();
+
+    let parsed = parse_key_type(&key_type)
+        .ok_or_else(|| StdError::generic_err("stored oracle_key_type invalid"))?;
+    let verified = match parsed {
+        "secp256k1" => deps.api.secp256k1_verify(&hash, signature.as_slice(), pubkey.as_slice())
+            .map_err(|e| StdError::generic_err(format!("secp256k1 verify error: {}", e)))?,
+        _ => false,
+    };
+    if !verified { return Err(StdError::generic_err("oracle signature invalid")); }
+
+    // policy
+    if risk > max_risk { return Err(StdError::generic_err("risk too high")); }
+
+    // proceed with send
+    let recipient_addr = deps.api.addr_validate(&recipient)?;
+    let funds: Vec<Coin> = info.funds.clone();
+    if funds.is_empty() { return Err(StdError::generic_err("no funds attached to Send")); }
+
+    let msg = BankMsg::Send { to_address: recipient_addr.to_string(), amount: funds.clone() };
+
+    let event = Event::new("send_with_aml_check")
+        .add_attribute("action", "send_with_aml_check")
+        .add_attribute("from", info.sender.to_string())
+        .add_attribute("to", recipient_addr.to_string())
+        .add_attribute("amount", format!("{:?}", funds))
+        .add_attribute("wallet", wallet)
+        .add_attribute("chain", chain)
+        .add_attribute("risk", risk.to_string())
+        .add_attribute("expires", expires.to_string());
+
+    Ok(Response::new().add_message(msg).add_event(event))
+}
+
 #[entry_point]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     use crate::msg::{AdminResponse, OracleDataResponse, OraclePubkeyResponse};
@@ -165,16 +226,16 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetOracleData {} => {
             let data = ORACLE_DATA.may_load(deps.storage)?;
-            to_binary(&OracleDataResponse { data })
+            to_json_binary(&OracleDataResponse { data })
         }
         QueryMsg::GetOraclePubkey {} => {
             let pk = ORACLE_PUBKEY.load(deps.storage)?;
             let kt = ORACLE_PUBKEY_TYPE.load(deps.storage)?;
-            to_binary(&OraclePubkeyResponse { pubkey: pk, key_type: kt })
+            to_json_binary(&OraclePubkeyResponse { pubkey: pk, key_type: kt })
         }
         QueryMsg::GetAdmin {} => {
             let admin = ADMIN.load(deps.storage)?;
-            to_binary(&AdminResponse { admin })
+            to_json_binary(&AdminResponse { admin })
         }
     }
 }

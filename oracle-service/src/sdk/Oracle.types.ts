@@ -23,6 +23,16 @@ export type ExecuteMsg = {
     new_key_type?: string | null;
     new_pubkey: Binary;
   };
+} | {
+  send_with_aml_check: {
+    recipient: string;
+    wallet: string;
+    chain: string;
+    max_risk: number;
+    risk: number;
+    expires: number;
+    signature: Binary;
+  };
 };
 export type QueryMsg = {
   get_oracle_data: {};

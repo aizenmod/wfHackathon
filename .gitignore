@@ -2,3 +2,4 @@
 data/btc/*
 data/eth/*
 *.DS_Store
+cursor_logs

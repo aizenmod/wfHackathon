@@ -61,6 +61,23 @@ export interface OracleInterface extends OracleReadOnlyInterface {
     newKeyType?: string;
     newPubkey: Binary;
   }, fee?: number | StdFee | "auto", memo?: string, _funds?: Coin[]) => Promise<ExecuteResult>;
+  sendWithAmlCheck: ({
+    recipient,
+    wallet,
+    chain,
+    maxRisk,
+    risk,
+    expires,
+    signature
+  }: {
+    recipient: string;
+    wallet: string;
+    chain: string;
+    maxRisk: number;
+    risk: number;
+    expires: number;
+    signature: Binary;
+  }, fee?: number | StdFee | "auto", memo?: string, _funds?: Coin[]) => Promise<ExecuteResult>;
 }
 export class OracleClient extends OracleQueryClient implements OracleInterface {
   client: SigningCosmWasmClient;
@@ -74,6 +91,7 @@ export class OracleClient extends OracleQueryClient implements OracleInterface {
     this.send = this.send.bind(this);
     this.oracleDataUpdate = this.oracleDataUpdate.bind(this);
     this.updateOracle = this.updateOracle.bind(this);
+    this.sendWithAmlCheck = this.sendWithAmlCheck.bind(this);
   }
   send = async ({
     recipient
@@ -111,6 +129,35 @@ export class OracleClient extends OracleQueryClient implements OracleInterface {
       update_oracle: {
         new_key_type: newKeyType,
         new_pubkey: newPubkey
+      }
+    }, fee, memo, _funds);
+  };
+  sendWithAmlCheck = async ({
+    recipient,
+    wallet,
+    chain,
+    maxRisk,
+    risk,
+    expires,
+    signature
+  }: {
+    recipient: string;
+    wallet: string;
+    chain: string;
+    maxRisk: number;
+    risk: number;
+    expires: number;
+    signature: Binary;
+  }, fee: number | StdFee | "auto" = "auto", memo?: string, _funds?: Coin[]): Promise<ExecuteResult> => {
+    return await this.client.execute(this.sender, this.contractAddress, {
+      send_with_aml_check: {
+        recipient,
+        wallet,
+        chain,
+        max_risk: maxRisk,
+        risk,
+        expires,
+        signature
       }
     }, fee, memo, _funds);
   };
